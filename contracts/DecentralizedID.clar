@@ -160,3 +160,165 @@
 (define-read-only (is-registered (identity-owner principal))
     (is-some (map-get? digital-identities identity-owner))
 )
+
+
+
+(define-map credential-ratings 
+    {credential-id: uint, rater: principal}
+    {
+        rating: uint,
+        timestamp: uint
+    }
+)
+
+(define-public (rate-credential (credential-id uint) (rating uint))
+    (let (
+        (sender tx-sender)
+        (credential (unwrap! (map-get? credentials {owner: sender, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (asserts! (and (>= rating u1) (<= rating u5)) (err u104))
+        (ok (map-set credential-ratings
+            {credential-id: credential-id, rater: sender}
+            {
+                rating: rating,
+                timestamp: stacks-block-height
+            }
+        ))
+    )
+)
+
+
+(define-map recovery-addresses
+    principal
+    {
+        backup: principal,
+        activated: bool
+    }
+)
+
+(define-public (set-recovery-address (backup-address principal))
+    (let ((sender tx-sender))
+        (asserts! (is-some (map-get? digital-identities sender)) ERR-NOT-REGISTERED)
+        (ok (map-set recovery-addresses
+            sender
+            {
+                backup: backup-address,
+                activated: false
+            }
+        ))
+    )
+)
+
+(define-public (recover-identity (original-address principal))
+    (let (
+        (sender tx-sender)
+        (recovery-data (unwrap! (map-get? recovery-addresses original-address) ERR-NOT-AUTHORIZED))
+    )
+        (asserts! (and 
+            (is-eq (get backup recovery-data) sender)
+            (not (get activated recovery-data))
+        ) ERR-NOT-AUTHORIZED)
+        (ok (map-set recovery-addresses
+            original-address
+            (merge recovery-data {activated: true})
+        ))
+    )
+)
+
+
+(define-map credential-categories
+    uint
+    {
+        name: (string-ascii 50),
+        description: (string-ascii 100)
+    }
+)
+
+(define-data-var next-category-id uint u1)
+
+(define-public (create-credential-category (name (string-ascii 50)) (description (string-ascii 100)))
+    (let ((category-id (var-get next-category-id)))
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (map-set credential-categories
+            category-id
+            {
+                name: name,
+                description: description
+            }
+        )
+        (var-set next-category-id (+ category-id u1))
+        (ok category-id)
+    )
+)
+
+
+(define-map endorsements
+    {credential-id: uint, endorser: principal}
+    {
+        message: (string-ascii 100),
+        timestamp: uint
+    }
+)
+
+(define-public (endorse-credential (credential-id uint) (message (string-ascii 100)))
+    (let (
+        (sender tx-sender)
+        (credential (unwrap! (map-get? credentials {owner: sender, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (ok (map-set endorsements
+            {credential-id: credential-id, endorser: sender}
+            {
+                message: message,
+                timestamp: stacks-block-height
+            }
+        ))
+    )
+)
+
+(define-map scheduled-access
+    {did-owner: principal, requestor: principal}
+    {
+        start-block: uint,
+        end-block: uint,
+        access-type: (string-ascii 10)
+    }
+)
+
+(define-public (schedule-access (requestor principal) (duration uint) (access-type (string-ascii 10)))
+    (let ((sender tx-sender))
+        (asserts! (is-some (map-get? digital-identities sender)) ERR-NOT-REGISTERED)
+        (ok (map-set scheduled-access
+            {did-owner: sender, requestor: requestor}
+            {
+                start-block: stacks-block-height,
+                end-block: (+ stacks-block-height duration),
+                access-type: access-type
+            }
+        ))
+    )
+)
+
+
+(define-map verification-levels
+    principal
+    {
+        level: uint,
+        last-updated: uint,
+        verifier: principal
+    }
+)
+
+(define-public (set-verification-level (identity-owner principal) (new-level uint))
+    (let ((sender tx-sender))
+        (asserts! (is-eq sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (asserts! (is-some (map-get? digital-identities identity-owner)) ERR-NOT-REGISTERED)
+        (ok (map-set verification-levels
+            identity-owner
+            {
+                level: new-level,
+                last-updated: stacks-block-height,
+                verifier: sender
+            }
+        ))
+    )
+)
