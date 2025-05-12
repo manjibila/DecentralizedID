@@ -322,3 +322,92 @@
         ))
     )
 )
+
+
+(define-map transfer-requests
+    {credential-id: uint, from: principal, to: principal}
+    {
+        status: (string-ascii 20),
+        requested-at: uint,
+        processed-at: uint
+    }
+)
+
+(define-public (request-credential-transfer (credential-id uint) (to principal))
+    (let (
+        (sender tx-sender)
+        (credential (unwrap! (map-get? credentials {owner: sender, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (ok (map-set transfer-requests
+            {credential-id: credential-id, from: sender, to: to}
+            {
+                status: "pending",
+                requested-at: stacks-block-height,
+                processed-at: u0
+            }
+        ))
+    )
+)
+
+(define-public (accept-credential-transfer (credential-id uint) (from principal))
+    (let (
+        (sender tx-sender)
+        (transfer-request (unwrap! (map-get? transfer-requests {credential-id: credential-id, from: from, to: sender}) ERR-NOT-AUTHORIZED))
+        (credential (unwrap! (map-get? credentials {owner: from, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (map-set credentials
+            {owner: sender, credential-id: credential-id}
+            credential
+        )
+        (map-delete credentials {owner: from, credential-id: credential-id})
+        (ok (map-set transfer-requests
+            {credential-id: credential-id, from: from, to: sender}
+            (merge transfer-request {
+                status: "completed",
+                processed-at: stacks-block-height
+            })
+        ))
+    )
+)
+
+
+(define-public (reject-credential-transfer (credential-id uint) (from principal))
+    (let (
+        (sender tx-sender)
+        (transfer-request (unwrap! (map-get? transfer-requests {credential-id: credential-id, from: from, to: sender}) ERR-NOT-AUTHORIZED))
+    )
+        (ok (map-set transfer-requests
+            {credential-id: credential-id, from: from, to: sender}
+            (merge transfer-request {
+                status: "rejected",
+                processed-at: stacks-block-height
+            })
+        ))
+    )
+)
+
+(define-map expiration-notifications
+    {owner: principal, credential-id: uint}
+    {
+        notification-sent: bool,
+        notification-block: uint,
+        days-before: uint
+    }
+)
+
+(define-public (set-expiration-notification (credential-id uint) (days-before uint))
+    (let (
+        (sender tx-sender)
+        (credential (unwrap! (map-get? credentials {owner: sender, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (ok (map-set expiration-notifications
+            {owner: sender, credential-id: credential-id}
+            {
+                notification-sent: false,
+                notification-block: (- (get expiry-date credential) (* days-before u144)),
+                days-before: days-before
+            }
+        ))
+    )
+)
+
