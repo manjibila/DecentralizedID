@@ -8,6 +8,41 @@
 (define-constant ERR-NOT-REGISTERED (err u102))
 (define-constant ERR-INVALID-CREDENTIAL (err u103))
 
+
+(define-constant ERR-NOT-VERIFIER (err u105))
+(define-constant ERR-VERIFICATION-EXISTS (err u106))
+(define-constant ERR-NO-VERIFICATION-REQUEST (err u107))
+
+(define-map authorized-verifiers
+    principal
+    {
+        name: (string-ascii 100),
+        specialty: (string-ascii 50),
+        active: bool,
+        registered-at: uint
+    }
+)
+
+(define-map verification-requests
+    {credential-owner: principal, credential-id: uint, verifier: principal}
+    {
+        status: (string-ascii 20),
+        requested-at: uint,
+        message: (string-ascii 200)
+    }
+)
+
+(define-map verified-credentials
+    {credential-owner: principal, credential-id: uint}
+    {
+        verifier: principal,
+        verified-at: uint,
+        verification-hash: (string-ascii 64),
+        valid-until: uint
+    }
+)
+
+
 ;; Data Maps
 (define-map digital-identities 
     principal 
@@ -411,3 +446,93 @@
     )
 )
 
+(define-public (register-verifier (name (string-ascii 100)) (specialty (string-ascii 50)))
+    (let ((sender tx-sender))
+        (asserts! (is-eq sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (ok (map-set authorized-verifiers
+            sender
+            {
+                name: name,
+                specialty: specialty,
+                active: true,
+                registered-at: stacks-block-height
+            }
+        ))
+    )
+)
+
+(define-public (request-verification (credential-id uint) (verifier principal) (message (string-ascii 200)))
+    (let (
+        (sender tx-sender)
+        (credential (unwrap! (map-get? credentials {owner: sender, credential-id: credential-id}) ERR-INVALID-CREDENTIAL))
+    )
+        (asserts! (is-some (map-get? authorized-verifiers verifier)) ERR-NOT-VERIFIER)
+        (asserts! (is-none (map-get? verification-requests {credential-owner: sender, credential-id: credential-id, verifier: verifier})) ERR-VERIFICATION-EXISTS)
+        (ok (map-set verification-requests
+            {credential-owner: sender, credential-id: credential-id, verifier: verifier}
+            {
+                status: "pending",
+                requested-at: stacks-block-height,
+                message: message
+            }
+        ))
+    )
+)
+
+(define-public (approve-verification (credential-owner principal) (credential-id uint) (verification-hash (string-ascii 64)) (valid-duration uint))
+    (let (
+        (sender tx-sender)
+        (request (unwrap! (map-get? verification-requests {credential-owner: credential-owner, credential-id: credential-id, verifier: sender}) ERR-NO-VERIFICATION-REQUEST))
+        (verifier-data (unwrap! (map-get? authorized-verifiers sender) ERR-NOT-VERIFIER))
+    )
+        (asserts! (get active verifier-data) ERR-NOT-VERIFIER)
+        (map-set verification-requests
+            {credential-owner: credential-owner, credential-id: credential-id, verifier: sender}
+            (merge request {status: "approved"})
+        )
+        (ok (map-set verified-credentials
+            {credential-owner: credential-owner, credential-id: credential-id}
+            {
+                verifier: sender,
+                verified-at: stacks-block-height,
+                verification-hash: verification-hash,
+                valid-until: (+ stacks-block-height valid-duration)
+            }
+        ))
+    )
+)
+
+(define-public (reject-verification (credential-owner principal) (credential-id uint))
+    (let (
+        (sender tx-sender)
+        (request (unwrap! (map-get? verification-requests {credential-owner: credential-owner, credential-id: credential-id, verifier: sender}) ERR-NO-VERIFICATION-REQUEST))
+        (verifier-data (unwrap! (map-get? authorized-verifiers sender) ERR-NOT-VERIFIER))
+    )
+        (asserts! (get active verifier-data) ERR-NOT-VERIFIER)
+        (ok (map-set verification-requests
+            {credential-owner: credential-owner, credential-id: credential-id, verifier: sender}
+            (merge request {status: "rejected"})
+        ))
+    )
+)
+
+(define-read-only (get-verification-status (credential-owner principal) (credential-id uint))
+    (match (map-get? verified-credentials {credential-owner: credential-owner, credential-id: credential-id})
+        verification-data (if (> (get valid-until verification-data) stacks-block-height)
+            (some verification-data)
+            none
+        )
+        none
+    )
+)
+
+(define-read-only (is-authorized-verifier (verifier principal))
+    (match (map-get? authorized-verifiers verifier)
+        verifier-data (get active verifier-data)
+        false
+    )
+)
+
+(define-read-only (get-verification-request (credential-owner principal) (credential-id uint) (verifier principal))
+    (map-get? verification-requests {credential-owner: credential-owner, credential-id: credential-id, verifier: verifier})
+)
